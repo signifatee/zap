@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Метеоаналитика Центрально-Лесного заповедника</title>
+<style>
+  :root { --accent:#2e7d4f; --bg:#f6f7f5; --card:#fff; --line:#dde3dd; --text:#1f2a24; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { background:var(--accent); color:#fff; padding:18px 28px; }
+  header h1 { margin:0; font-size:20px; font-weight:600; }
+  header .sub { opacity:.85; font-size:13px; margin-top:2px; }
+  .wrap { max-width:1200px; margin:0 auto; padding:20px; }
+  .controls { display:flex; flex-wrap:wrap; gap:14px; align-items:end;
+              background:var(--card); border:1px solid var(--line);
+              border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+  .controls label { display:block; font-size:12px; color:#5b6b60; margin-bottom:4px; }
+  .controls select, .controls input[type=date] {
+      padding:7px 10px; border:1px solid var(--line); border-radius:7px;
+      font:inherit; background:#fff; min-width:150px; }
+  .levels { display:flex; gap:6px; }
+  .levels button, .tabbtn { padding:7px 14px; border:1px solid var(--line);
+      border-radius:7px; background:#fff; cursor:pointer; font:inherit; }
+  .tabbtn:disabled { opacity:.5; cursor:not-allowed; }
+  .tabbtn:focus-visible, button.primary:focus-visible {
+      outline:3px solid #174f31; outline-offset:2px; }
+  .levels button.active, .tabbtn.active { background:var(--accent);
+      color:#fff; border-color:var(--accent); }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+  .card { background:var(--card); border:1px solid var(--line);
+          border-radius:10px; padding:16px; margin-bottom:16px; isolation:isolate; }
+  /* контейнеры графиков: минимальная высота, чтобы Plotly не рисовался в 0px */
+  #chart, #devchart, #cmpchart, #dcchart, #rosechart, #fcchart1, #fcchart2 {
+      min-height:380px; }
+  .anom { display:flex; flex-wrap:wrap; gap:16px; align-items:center;
+          margin:10px 0 14px; font-size:13px; }
+  .anom input[type=range] { width:180px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:900px){ .grid2{ grid-template-columns:1fr; } }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { border:1px solid var(--line); padding:5px 8px; text-align:right; }
+  th { background:#eef3ef; position:sticky; top:0; }
+  td:first-child, th:first-child { text-align:left; }
+  .tablebox { max-height:420px; overflow:auto; border-radius:8px; }
+  .note { color:#5b6b60; font-size:13px; margin:6px 0 0; }
+  .invalid td { color:#98a59c; background:#f3f4f3; }
+  .hidden { display:none; }
+  h2 { font-size:17px; margin:0 0 12px; }
+  h3 { font-size:15px; margin:14px 0 8px; }
+  .statgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; }
+  .stat { background:#eef3ef; border-radius:8px; padding:10px 12px; }
+  .stat .v { font-size:19px; font-weight:650; }
+  .stat .k { font-size:12px; color:#5b6b60; }
+  .years { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0 14px; }
+  .years label { font-size:13px; display:flex; gap:4px; align-items:center; }
+  button.primary { background:var(--accent); color:#fff; border:none;
+      border-radius:7px; padding:9px 18px; font:inherit; cursor:pointer; }
+  footer { color:#8a978d; font-size:12px; text-align:center; padding:18px; }
+</style>
+<script>/*__PLOTLY_JS__*/</script>
+<script>/*__XLSX_JS__*/</script>
+</head>
+<body>
+<header>
+  <h1>Умная аналитика метеоданных Центрально-Лесного заповедника</h1>
+</header>
+
+<div class="wrap">
+  <div class="controls">
+    <div>
+      <label>Метеостанция</label>
+      <select id="station"></select>
+    </div>
+    <div>
+      <label>Параметр</label>
+      <select id="param"></select>
+    </div>
+    <div>
+      <label>С</label>
+      <input type="date" id="from">
+    </div>
+    <div>
+      <label>По</label>
+      <input type="date" id="to">
+    </div>
+    <div id="aggcontrol">
+      <label>Агрегация</label>
+      <div class="levels" id="levels">
+        <button data-level="daily" class="active">Сутки</button>
+        <button data-level="pentad">Пентады</button>
+        <button data-level="decade">Декады</button>
+        <button data-level="monthly">Месяцы</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tabbtn active" data-tab="main">Таблицы и графики</button>
+    <button class="tabbtn" data-tab="dev">Отклонения от среднего</button>
+    <button class="tabbtn" data-tab="cmp">Поляна vs поле</button>
+    <button class="tabbtn" data-tab="wind">Роза ветров</button>
+    <button class="tabbtn" data-tab="fc">Прогноз</button>
+  </div>
+
+  <!-- Вкладка: таблицы и графики -->
+  <section id="tab-main">
+    <div class="card">
+      <div class="anom" id="anombar">
+        <label><input type="checkbox" id="anomenable"> Локальные аномалии (суточный ряд)</label>
+        <label>Окно:
+          <select id="anomwin"><option>7</option><option selected>30</option><option>90</option></select> сут.</label>
+        <label>Порог: <b id="anomsigval">3.0</b>σ
+          <input type="range" id="anomsig" min="1" max="5" step="0.5" value="3"></label>
+        <span class="note" id="anomnote"></span>
+      </div>
+      <div id="chart"></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h2>Статистика за период</h2>
+        <div class="statgrid" id="stats"></div>
+        <p class="note" id="covnote"></p>
+      </div>
+      <div class="card">
+        <h2>Таблица <span class="note" id="tblnote"></span></h2>
+        <p style="margin:0 0 10px">
+          <button class="tabbtn" id="csvbtn">Скачать CSV</button>
+          <button class="tabbtn" id="xlsxbtn">Скачать Excel</button>
+        </p>
+        <div class="tablebox"><table id="table"></table></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Проверка расчёта</h2>
+      <p class="note">Что вошло в расчёт за выбранный период и что исключено контролем качества.
+      Флаг исключает только свой параметр; dup_conflict — строку целиком.</p>
+      <div class="statgrid" id="qcstats" style="margin-top:10px"></div>
+      <div class="grid2" style="margin-top:12px">
+        <div>
+          <h3>Значения, исключённые по флагам</h3>
+          <div class="tablebox"><table id="qcparams"></table></div>
+        </div>
+        <div>
+          <h3>Причины исключений</h3>
+          <div class="tablebox"><table id="qcreasons"></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Вкладка: отклонения -->
+  <section id="tab-dev" class="hidden">
+    <div class="card">
+      <h2>Отклонение месячных средних от «среднего за выбранный период»</h2>
+      <div class="years" id="devyears"></div>
+      <div class="anom">
+        <label>Порог аномалии |отклонение| ≥ <b id="devthval">2.0</b> (ед. параметра)<br>
+          <input type="range" id="devth" min="0" max="5" step="0.1" value="2"></label>
+        <select id="devdir">
+          <option value="all">Все аномалии</option>
+          <option value="pos">Только положительные (+)</option>
+          <option value="neg">Только отрицательные (−)</option>
+        </select>
+        <label><input type="checkbox" id="devonly"> Только аномалии в таблице</label>
+      </div>
+      <p class="note" id="devnote"></p>
+      <div id="devchart"></div>
+      <h3>Таблица</h3>
+      <p style="margin:0 0 10px">
+        <button class="tabbtn" id="devcsv">Скачать CSV</button>
+        <button class="tabbtn" id="devxlsx">Скачать Excel</button>
+      </p>
+      <div class="tablebox"><table id="devtable"></table></div>
+    </div>
+  </section>
+
+  <!-- Вкладка: поляна vs поле -->
+  <section id="tab-cmp" class="hidden">
+    <div class="card">
+      <h2>Сравнение «поляна (Кр1) vs поле (Кр2)»</h2>
+      <label>Год: <select id="cmpyear"><option>2024</option><option selected>2025</option></select></label>
+      <div class="grid2" style="margin-top:12px">
+        <div id="cmpchart"></div>
+        <div id="dcchart"></div>
+      </div>
+      <h3>Разница температур по месяцам, °C (поляна − поле)</h3>
+      <p style="margin:0 0 10px">
+        <button class="tabbtn" id="cmpcsv">Скачать CSV</button>
+        <button class="tabbtn" id="cmpxlsx">Скачать Excel</button>
+      </p>
+      <div class="tablebox"><table id="cmptable"></table></div>
+    </div>
+  </section>
+
+  <!-- Вкладка: роза ветров -->
+  <section id="tab-wind" class="hidden">
+    <div class="card">
+      <h2>Роза ветров</h2>
+      <p class="note">Повторяемость направлений по валидным измерениям выбранной станции.
+      1998 год (нет измерений) и 2021 (недостоверные) исключены контролем качества.</p>
+      <div id="rosechart"></div>
+      <h3>Повторяемость направлений</h3>
+      <p style="margin:0 0 10px">
+        <button class="tabbtn" id="windcsv">Скачать CSV</button>
+        <button class="tabbtn" id="windxlsx">Скачать Excel</button>
+      </p>
+      <div class="tablebox"><table id="rosetable"></table></div>
+    </div>
+  </section>
+
+  <!-- Вкладка: прогноз -->
+  <section id="tab-fc" class="hidden">
+    <div class="card">
+      <h2>Краткосрочный прогноз (Open-Meteo, урочище «Красное»)</h2>
+      <button class="primary" id="fcbtn">Получить прогноз на 3 суток</button>
+      <span class="note" id="fcstatus"></span>
+      <div id="fcchart1" style="margin-top:12px"></div>
+      <div id="fcchart2"></div>
+      <p style="margin:0 0 10px">
+        <button class="tabbtn" id="fccsv" disabled>Скачать CSV</button>
+        <button class="tabbtn" id="fcxlsx" disabled>Скачать Excel</button>
+      </p>
+      <div class="tablebox"><table id="fctable"></table></div>
+    </div>
+  </section>
+</div>
+
+<footer id="geninfo"></footer>
+
+<script id="data" type="application/json">__DATA__</script>
+
+<script>
+"use strict";
+const DATA = JSON.parse(document.getElementById("data").textContent);
+const PARAM_LABELS = {
+  t_air:"Температура воздуха, °C", rh:"Относительная влажность, %",
+  wind_speed:"Скорость ветра, м/с", wind_gust:"Порывы ветра, м/с",
+  wind_dir:"Направление ветра, °", soil_05:"Температура почвы 5 см, °C",
+  soil_10:"Температура почвы 10 см, °C", soil_20:"Температура почвы 20 см, °C",
+  pressure_hpa:"Давление, гПа"
+};
+const state = { station:"ame60", param:"t_air", level:"daily", tab:"main" };
+const $ = id => document.getElementById(id);
+const S = () => DATA.stations[state.station];
+
+// ---------- утилиты ----------
+function toTable(rows, cols, maxRows=1000, rowCls=null){
+  let h = "<tr>" + cols.map(c=>`<th>${c[1]}</th>`).join("") + "</tr>";
+  const view = rows.slice(0, maxRows);
+  h += view.map(r => {
+    const cls = rowCls ? rowCls(r) : "";
+    return `<tr${cls?` class="${cls}"`:""}>` + cols.map(c => {
+      let v = r[c[0]];
+      if (typeof v === "number") v = Math.round(v*100)/100;
+      return `<td>${v ?? ""}</td>`;
+    }).join("") + "</tr>";
+  }).join("");
+  return h;
+}
+function statsOf(values){
+  const v = values.filter(x => x !== null && x !== undefined && !isNaN(x));
+  if (!v.length) return null;
+  const n = v.length, mean = v.reduce((a,b)=>a+b,0)/n;
+  const sd = Math.sqrt(v.reduce((a,b)=>a+(b-mean)**2,0)/n);
+  return { n, mean, min:Math.min(...v), max:Math.max(...v), sd };
+}
+function inPeriod(dateStr){ return dateStr >= state.from && dateStr <= state.to; }
+
+// Безопасная отрисовка Plotly: только видимый контейнер + resize после layout.
+// Иначе при переключении вкладок график рисуется в display:none с нулевой
+// шириной, и при возврате на вкладку разметка «плывёт».
+function plot(id, traces, layout, config){
+  const gd = $(id);
+  if (!gd || gd.closest("section").classList.contains("hidden")) return;
+  layout.autosize = true;
+  return Plotly.react(gd, traces, layout,
+                      Object.assign({responsive:true}, config||{}))
+    .then(g => Plotly.Plots.resize(g));
+}
+
+// ---------- инициализация контролов ----------
+function initStations(){
+  $("station").innerHTML = Object.entries(DATA.stations)
+    .map(([k,s]) => `<option value="${k}">${s.title}</option>`).join("");
+  $("station").value = state.station;
+}
+function initParams(){
+  const st = S();
+  $("param").innerHTML = st.params
+    .map(p => `<option value="${p}">${PARAM_LABELS[p]||p}</option>`).join("");
+  if (!st.params.includes(state.param)) state.param = st.params[0];
+  $("param").value = state.param;
+  const dates = st.daily.map(r=>r.date);
+  state.from = dates[0]; state.to = dates[dates.length-1];
+  $("from").value = state.from; $("to").value = state.to;
+  $("from").min = dates[0]; $("from").max = state.to;
+  $("to").min = dates[0]; $("to").max = state.to;
+}
+
+// ---------- вкладка «Таблицы и графики» ----------
+// Месячная таблица строится из покрытия: невалидные месяцы видны как
+// строки-пропуски (серые, с причиной), на графике — разрывы.
+function monthlyRows(){
+  const st = S(), p = state.param;
+  const vals = Object.fromEntries(st.monthly.map(r=>[r.month_start, r]));
+  return st.coverage.map(c => {
+    const ms = `${c.year}-${String(c.month).padStart(2,"0")}-01`;
+    const invalid = c.days_in_month - c.valid_days;
+    const base = {month_start:ms, month_valid:c.month_valid,
+      status: c.month_valid ? "полный" : `пропуски: ${invalid} дн.`};
+    const v = vals[ms];
+    if (v) return Object.assign(base, v);
+    return Object.assign(base, {[p+"_mean"]:null, [p+"_min"]:null,
+                                [p+"_max"]:null, n_days:null});
+  });
+}
+function currentTable(){
+  const st = S(), p = state.param;
+  if (state.level === "daily")
+    return { rows: st.daily.filter(r=>inPeriod(r.date)), x:"date", y:p+"_mean",
+             cols:[["date","Дата"],[p+"_mean","Среднее"],[p+"_min","Мин"],
+                   [p+"_max","Макс"],["n_obs","Сроков"]] };
+  if (state.level === "pentad")
+    return { rows: st.pentad.filter(r=>inPeriod(r.month_start)), x:"month_start", y:p,
+             cols:[["month_start","Месяц"],["pentad","Пентада"],[p,"Среднее"],["n_days","Дней"]] };
+  if (state.level === "decade")
+    return { rows: st.decade.filter(r=>inPeriod(r.month_start)), x:"month_start", y:p,
+             cols:[["month_start","Месяц"],["decade","Декада"],[p,"Среднее"],["n_days","Дней"]] };
+  return { rows: monthlyRows().filter(r=>inPeriod(r.month_start)), x:"month_start", y:p+"_mean",
+           cols:[["month_start","Месяц"],[p+"_mean","Среднее"],[p+"_min","Мин"],
+                 [p+"_max","Макс"],["n_days","Дней"],["status","Полнота"]],
+           rowCls: r => r.month_valid ? "" : "invalid" };
+}
+// Локальные аномалии суточного ряда: z-score относительно скользящего окна.
+// Считаем только по валидным суткам; окно должно быть заполнено >= 60%.
+function rollingAnoms(y, win, sig){
+  const vals = y.map(v => (v===null||v===undefined) ? NaN : v);
+  const res = new Array(vals.length).fill(null);
+  for (let i=0; i<vals.length; i++){
+    const w = vals.slice(Math.max(0,i-win+1), i+1).filter(v=>!isNaN(v));
+    if (w.length < Math.max(3, win*0.6) || isNaN(vals[i])) continue;
+    const m = w.reduce((s,v)=>s+v,0)/w.length;
+    const sd = Math.sqrt(w.reduce((s,v)=>s+(v-m)**2,0)/w.length);
+    if (sd > 0 && Math.abs(vals[i]-m)/sd >= sig) res[i] = vals[i];
+  }
+  return res;
+}
+
+function renderMain(){
+  const t = currentTable();
+  const x = t.rows.map(r=>r[t.x]), y = t.rows.map(r=>r[t.y]);
+  const traces = [{x, y, type:"scatter", mode:"lines+markers",
+    line:{color:"#2e7d4f"}, name:"Значение"}];
+
+  // --- локальные аномалии по скользящему окну (только суточный ряд) ---
+  const anomOn = state.level === "daily" && $("anomenable").checked;
+  $("anombar").style.display = state.level === "daily" ? "flex" : "none";
+  $("anomnote").textContent = "";
+  if (anomOn){
+    const win = +$("anomwin").value, sig = +$("anomsig").value;
+    const ay = rollingAnoms(y, win, sig);
+    const nA = ay.filter(v=>v!==null).length;
+    traces.push({x, y:ay, type:"scatter", mode:"markers", name:"Аномалия",
+      marker:{color:"#c0504d", size:9, symbol:"circle-open", line:{width:2}}});
+    $("anomnote").textContent =
+      `Локальных аномалий: ${nA} (окно ${win} сут., порог ${sig}σ)`;
+  }
+
+  plot("chart", traces, {
+    title:`${PARAM_LABELS[state.param]} — ${S().title}`,
+    margin:{t:50,r:20,b:50,l:60}, xaxis:{title:""}, yaxis:{title:PARAM_LABELS[state.param]}
+  });
+
+  const st = statsOf(y);
+  $("stats").innerHTML = st ? [
+    ["Среднее", st.mean.toFixed(2)], ["Мин", st.min.toFixed(2)],
+    ["Макс", st.max.toFixed(2)], ["Ст. отклонение", st.sd.toFixed(2)],
+    ["Значений", st.n]
+  ].map(([k,v]) => `<div class="stat"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("")
+  : "<p class='note'>Нет валидных данных за выбранный период.</p>";
+
+  const cov = S().coverage.filter(r => {
+    const ms = `${r.year}-${String(r.month).padStart(2,"0")}-01`;
+    return inPeriod(ms);
+  });
+  const ok = cov.filter(r=>r.month_valid).length;
+  $("covnote").textContent = `Валидных месяцев в периоде: ${ok} из ${cov.length}. ` +
+    "Неполные сутки и месяцы в расчёт не входят (правила полноты).";
+
+  $("tblnote").textContent = t.rows.length > 1000 ? `(показаны первые 1000 из ${t.rows.length})` : "";
+  $("table").innerHTML = toTable(t.rows, t.cols, 1000, t.rowCls || null);
+  renderQc();
+}
+
+// ---------- панель «Проверка расчёта» ----------
+function renderQc(){
+  const rows = (S().qc_stats || []).filter(r => inPeriod(r.month + "-01"));
+  let total = 0, dup = 0;
+  const params = {}, reasons = {dup_conflict: 0};
+  rows.forEach(r => {
+    total += r.n_rows; dup += r.n_dup;
+    reasons.dup_conflict += r.n_dup;
+    Object.entries(r.params || {}).forEach(([p,n]) => params[p] = (params[p]||0)+n);
+    Object.entries(r.reasons || {}).forEach(([k,n]) => reasons[k] = (reasons[k]||0)+n);
+  });
+  $("qcstats").innerHTML = [
+    ["Записей в периоде", total], ["Исключено строк (dup_conflict)", dup],
+    ["Строк использовано", total - dup],
+    ["Значений снято по флагам", Object.values(params).reduce((a,b)=>a+b,0)]
+  ].map(([k,v]) => `<div class="stat"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
+
+  const REASON = {dup_conflict:"Противоречивые дубли срока (строка целиком)",
+                  range:"Значение вне физического диапазона",
+                  fault:"Сбой датчика"};
+  $("qcreasons").innerHTML = toTable(
+    Object.entries(reasons).filter(([,n])=>n>0).map(([k,n])=>({r:REASON[k]||k, n})),
+    [["r","Причина"],["n","Кол-во"]]);
+  $("qcparams").innerHTML = toTable(
+    Object.entries(params).filter(([,n])=>n>0)
+      .map(([p,n])=>({p:PARAM_LABELS[p]||p, n})),
+    [["p","Параметр"],["n","Исключено значений"]]);
+}
+
+// ---------- экспорт таблиц (все вкладки) ----------
+const EXPORTS = {dev:null, cmp:null, wind:null, fc:null};
+function tablePayload(cols, rows){
+  return {header: cols.map(c=>c[1]),
+          body: rows.map(r => cols.map(c => r[c[0]] ?? ""))};
+}
+function download(blob, name){
+  const a = document.createElement("a");
+  a.style.display = "none";
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);   // без вставки в DOM часть браузеров игнорирует download
+  a.click();
+  // Мгновенный revoke обрывает скачивание и может дать пустую страницу.
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+}
+function csvCell(value){
+  const s = String(value ?? "");
+  return /[";\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function saveCsv(meta, payload, name){
+  const lines = meta.concat([[], payload.header], payload.body);
+  const txt = lines.map(row => row.map(csvCell).join(";")).join("\r\n");
+  download(new Blob(["\uFEFF"+txt], {type:"text/csv;charset=utf-8"}), name);
+}
+function saveXlsx(meta, payload, name){
+  if (typeof XLSX === "undefined"){          // запасной путь — CSV
+    saveCsv(meta, payload, name.replace(/\.xlsx$/, ".csv")); return;
+  }
+  const ws = XLSX.utils.aoa_to_sheet([...meta, [], payload.header, ...payload.body]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Данные");
+  const out = XLSX.write(wb, {bookType:"xlsx", type:"array"});
+  download(new Blob([out], {
+    type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  }), name);
+}
+function setExport(key, cols, rows, meta, basename){
+  EXPORTS[key] = {cols, rows, meta, basename};
+  ["csv", "xlsx"].forEach(format => {
+    const button = $(key+format);
+    if (button) button.disabled = false;
+  });
+}
+function clearExport(key){
+  EXPORTS[key] = null;
+  ["csv", "xlsx"].forEach(format => {
+    const button = $(key+format);
+    if (button) button.disabled = true;
+  });
+}
+function runExport(key, format){
+  const item = EXPORTS[key];
+  if (!item) return;
+  const payload = tablePayload(item.cols, item.rows);
+  const name = `${item.basename}.${format}`;
+  format === "xlsx" ? saveXlsx(item.meta, payload, name)
+                    : saveCsv(item.meta, payload, name);
+}
+function bindExport(key){
+  $(key+"csv").onclick = () => runExport(key, "csv");
+  $(key+"xlsx").onclick = () => runExport(key, "xlsx");
+}
+function exportRows(){
+  const t = currentTable();
+  const meta = [
+    ["Станция", S().title], ["Параметр", PARAM_LABELS[state.param]],
+    ["Период", `${state.from} — ${state.to}`], ["Агрегация", state.level],
+    ["Правила", "QC по флагам; только валидные сутки и месяцы"]
+  ];
+  return {meta, payload:tablePayload(t.cols, t.rows)};
+}
+$("csvbtn").onclick = () => {
+  const {meta, payload} = exportRows();
+  saveCsv(meta, payload, "метео_таблица.csv");
+};
+$("xlsxbtn").onclick = () => {
+  const {meta, payload} = exportRows();
+  saveXlsx(meta, payload, "метео_таблица.xlsx");
+};
+
+// ---------- вкладка «Отклонения» ----------
+function renderDev(){
+  const st = S(), p = state.param+"_mean";
+  const years = [...new Set(st.monthly.map(r=>+r.month_start.slice(0,4)))].sort();
+  if (!renderDev.sel || ![...renderDev.sel].some(y=>years.includes(y)))
+    renderDev.sel = new Set(years);
+  $("devyears").innerHTML = years.map(y =>
+    `<label><input type="checkbox" value="${y}" ${renderDev.sel.has(y)?"checked":""}> ${y}</label>`
+  ).join("");
+  $("devyears").querySelectorAll("input").forEach(cb =>
+    cb.onchange = () => { cb.checked ? renderDev.sel.add(+cb.value)
+                                     : renderDev.sel.delete(+cb.value); renderDev(); });
+
+  const rows = st.monthly.filter(r => renderDev.sel.has(+r.month_start.slice(0,4)));
+  const byMonth = {};
+  rows.forEach(r => {
+    const m = +r.month_start.slice(5,7);
+    (byMonth[m] ??= []).push(r[p]);
+  });
+  const mean = arr => arr.reduce((a,b)=>a+b,0)/arr.length;
+  const pm = Object.fromEntries(Object.entries(byMonth).map(([m,v])=>[m, mean(v)]));
+  const dev = rows.map(r => {
+    const m = +r.month_start.slice(5,7);
+    return { date:r.month_start, year:+r.month_start.slice(0,4), month:m,
+             value:r[p], period:pm[m], dev:r[p]-pm[m] };
+  }).filter(r => r.value !== null && r.value !== undefined);
+
+  // --- динамическая настройка аномалий ---
+  const th = parseFloat($("devth").value), dir = $("devdir").value;
+  const isAnom = r => {
+    if (dir === "pos") return r.dev >= th;
+    if (dir === "neg") return -r.dev >= th;
+    return Math.abs(r.dev) >= th;
+  };
+  dev.forEach(r => r.anom = isAnom(r));
+  const nAnom = dev.filter(r=>r.anom).length;
+  const only = $("devonly").checked;
+  const tableRows = only ? dev.filter(r=>r.anom) : dev;
+
+  const ny = renderDev.sel.size;
+  $("devnote").textContent =
+    `«Среднее за выбранный период» посчитано по валидным месяцам; лет в расчёте: ${ny}. ` +
+    `Аномалий при пороге ${th}: ${nAnom} из ${dev.length} месяцев.`;
+  plot("devchart", [{
+    x:dev.map(r=>r.date), y:dev.map(r=>r.dev), type:"bar",
+    marker:{color:dev.map(r => r.anom
+      ? (r.dev>=0 ? "#c0504d" : "#4d6fc0")   // аномалии — яркие
+      : "#c9d4cb")}                           // остальные — приглушённые
+  }], { title:`Отклонение ${PARAM_LABELS[state.param]} от среднего за ${ny} лет`,
+        margin:{t:50,r:20,b:50,l:60}, yaxis:{title:"Отклонение"} });
+  const devCols = [["date","Месяц"],["value","Значение"],
+    ["period","Среднее за период"],["dev","Отклонение"]];
+  $("devtable").innerHTML = toTable(tableRows, devCols);
+  setExport("dev", devCols, tableRows, [
+    ["Станция", st.title], ["Параметр", PARAM_LABELS[state.param]],
+    ["Годы", [...renderDev.sel].sort((a,b)=>a-b).join(", ")],
+    ["Число лет в расчёте", ny],
+    ["Порог аномалии", th],
+    ["Направление аномалий", $("devdir").selectedOptions[0].textContent],
+    ["Строки таблицы", only ? "Только аномалии" : "Все месяцы"],
+    ["Правила", "QC по флагам; только валидные месяцы"]
+  ], "отклонения_от_среднего");
+}
+
+// ---------- вкладка «Поляна vs поле» ----------
+function renderCmp(){
+  const year = $("cmpyear").value;
+  const k1 = DATA.stations.kr1, k2 = DATA.stations.kr2;
+  if (!k1 || !k2){ $("cmpchart").innerHTML = "Нужны данные обеих точек."; return; }
+  const m1 = k1.monthly.filter(r=>r.month_start.startsWith(year));
+  const m2 = Object.fromEntries(k2.monthly.filter(r=>r.month_start.startsWith(year))
+                                .map(r=>[r.month_start, r]));
+  const rows = m1.filter(r=>m2[r.month_start]).map(r => ({
+    month:r.month_start, glade:r.t_air_mean, field:m2[r.month_start].t_air_mean,
+    diff: r.t_air_mean - m2[r.month_start].t_air_mean
+  }));
+  plot("cmpchart", [{x:rows.map(r=>r.month), y:rows.map(r=>r.diff),
+    type:"bar", marker:{color:"#2e7d4f"}}],
+    {title:"Разница температур (поляна − поле), °C", margin:{t:50,r:20,b:50,l:50}},
+    {responsive:true});
+
+  const d1 = k1.diurnal[year]||[], d2 = k2.diurnal[year]||[];
+  plot("dcchart", [
+    {x:d1.map(r=>r.hour), y:d1.map(r=>r.mean), type:"scatter", mode:"lines", name:"Поляна (Кр1)"},
+    {x:d2.map(r=>r.hour), y:d2.map(r=>r.mean), type:"scatter", mode:"lines", name:"Поле (Кр2)"}
+  ], {title:"Средний суточный ход температуры, °C", margin:{t:50,r:20,b:50,l:50},
+      xaxis:{title:"Час"}}, {responsive:true});
+  const cmpCols = [["month","Месяц"],["glade","Поляна, °C"],
+    ["field","Поле, °C"],["diff","Разница (поляна − поле), °C"]];
+  $("cmptable").innerHTML = toTable(rows, cmpCols);
+  setExport("cmp", cmpCols, rows, [
+    ["Год", year], ["Показатель", "Среднемесячная температура воздуха"],
+    ["Формула разницы", "Кр1 (поляна) − Кр2 (поле)"],
+    ["Правила", "QC по флагам; только валидные месяцы"]
+  ], `поляна_против_поля_${year}`);
+}
+
+// ---------- вкладка «Роза ветров» ----------
+function renderRose(){
+  const rose = S().rose;
+  plot("rosechart", [{
+    type:"barpolar", r:rose.map(r=>r.freq), theta:rose.map(r=>r.angle),
+    text:rose.map(r=>r.label), marker:{color:"#2e7d4f"}, hovertemplate:
+      "%{text} (%{theta}°): %{r:.1f}%<extra></extra>"
+  }], { title:`Повторяемость направлений ветра, % (n=${rose[0]?.n_obs ?? 0})`,
+        polar:{angularaxis:{direction:"clockwise", rotation:90}},
+        margin:{t:60,r:20,b:40,l:40} }, {responsive:true});
+  const roseCols = [["label","Румб"],["angle","Центр сектора, °"],
+    ["freq","Повторяемость, %"]];
+  $("rosetable").innerHTML = toTable(rose, roseCols);
+  setExport("wind", roseCols, rose, [
+    ["Станция", S().title], ["Период", "Все доступные годы станции"],
+    ["Валидных измерений направления", rose[0]?.n_obs ?? 0],
+    ["Число секторов", rose.length],
+    ["Правила", "Направления в градусах; 1998 и 2021 годы исключены"]
+  ], `роза_ветров_${state.station}`);
+}
+
+// ---------- вкладка «Прогноз» ----------
+async function loadForecast(){
+  $("fcstatus").textContent = " Загружаю…";
+  try {
+    const url = "https://api.open-meteo.com/v1/forecast?latitude=56.45&longitude=32.97" +
+      "&hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,surface_pressure" +
+      "&forecast_days=3&timezone=Europe%2FMoscow&wind_speed_unit=ms";
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const h = (await response.json()).hourly;
+    if (!h || !Array.isArray(h.time)) throw new Error("API не вернул почасовой прогноз");
+    const updated = new Date().toLocaleString("ru-RU");
+    $("fcstatus").textContent = " обновлено " + updated;
+    plot("fcchart1", [{x:h.time, y:h.temperature_2m, type:"scatter",
+      mode:"lines", line:{color:"#c0504d"}}],
+      {title:"Температура воздуха, °C", margin:{t:50,r:20,b:50,l:60}}, {responsive:true});
+    plot("fcchart2", [{x:h.time, y:h.precipitation, type:"bar",
+      marker:{color:"#4d6fc0"}}],
+      {title:"Осадки, мм", margin:{t:50,r:20,b:50,l:60}}, {responsive:true});
+    const rows = h.time.map((t,i)=>({time:t.replace("T"," "),
+      t:h.temperature_2m[i], rh:h.relative_humidity_2m[i],
+      pr:h.precipitation[i], ws:h.wind_speed_10m[i], p:h.surface_pressure[i]}));
+    const fcCols = [["time","Время"],["t","Темп., °C"],
+      ["rh","Влажн., %"],["pr","Осадки, мм"],["ws","Ветер, м/с"],["p","Давл., гПа"]];
+    $("fctable").innerHTML = toTable(rows, fcCols, 200);
+    setExport("fc", fcCols, rows, [
+      ["Источник", "Open-Meteo"], ["Место", "Урочище «Красное»"],
+      ["Координаты", "56.45, 32.97"], ["Обновлено", updated],
+      ["Часовой пояс", "Europe/Moscow"], ["Скорость ветра", "м/с"]
+    ], "прогноз_3_суток");
+  } catch(e) {
+    $("fcstatus").textContent = " Не удалось получить прогноз: " + e.message +
+      " (нужен интернет; вся остальная страница работает офлайн)";
+  }
+}
+
+// ---------- события ----------
+$("station").onchange = e => {
+  state.station = e.target.value;
+  renderDev.sel = null;
+  initParams();
+  renderAll();
+};
+$("param").onchange = e => { state.param = e.target.value; renderMain(); renderDev.sel=null; renderDev(); };
+$("from").onchange = e => { state.from = e.target.value; renderMain(); };
+$("to").onchange = e => { state.to = e.target.value; renderMain(); };
+$("levels").querySelectorAll("button").forEach(b => b.onclick = () => {
+  $("levels").querySelector(".active").classList.remove("active");
+  b.classList.add("active"); state.level = b.dataset.level; renderMain();
+});
+$("cmpyear").onchange = renderCmp;
+$("fcbtn").onclick = loadForecast;
+["dev", "cmp", "wind", "fc"].forEach(bindExport);
+$("devth").oninput = () => { $("devthval").textContent = $("devth").value; renderDev(); };
+$("devdir").onchange = renderDev;
+$("devonly").onchange = renderDev;
+$("anomenable").onchange = renderMain;
+$("anomwin").onchange = renderMain;
+$("anomsig").oninput = () => { $("anomsigval").textContent = $("anomsig").value; renderMain(); };
+document.querySelectorAll(".tabs .tabbtn[data-tab]").forEach(b => b.onclick = () => {
+  document.querySelector(".tabbtn.active").classList.remove("active");
+  b.classList.add("active");
+  document.querySelectorAll("section").forEach(s => s.classList.add("hidden"));
+  $("tab-"+b.dataset.tab).classList.remove("hidden");
+  state.tab = b.dataset.tab;
+  // рендерим ПОСЛЕ того, как браузер применил видимость секции —
+  // иначе Plotly получит контейнер с нулевой шириной
+  requestAnimationFrame(renderAll);
+});
+
+function renderAll(){
+  // Агрегация задаёт представление только главной таблицы и графика.
+  $("aggcontrol").classList.toggle("hidden", state.tab !== "main");
+  if (state.tab === "main") renderMain();
+  if (state.tab === "dev") renderDev();
+  if (state.tab === "cmp") renderCmp();
+  if (state.tab === "wind") renderRose();
+}
+
+initStations(); initParams();
+// deep-link: index.html#dev / #cmp / #wind / #fc открывает сразу нужную вкладку
+const hashTab = location.hash.slice(1);
+if (["dev","cmp","wind","fc"].includes(hashTab)) {
+  document.querySelector(".tabbtn.active").classList.remove("active");
+  document.querySelector(`.tabbtn[data-tab="${hashTab}"]`).classList.add("active");
+  document.querySelectorAll("section").forEach(s => s.classList.add("hidden"));
+  $("tab-"+hashTab).classList.remove("hidden");
+  state.tab = hashTab;
+}
+renderAll();
+$("geninfo").textContent = "Отчёт сгенерирован: " + DATA.generated_at +
+  " · контроль качества и правила полноты — по регламенту кейса 02";
+</script>
+</body>
+</html>
